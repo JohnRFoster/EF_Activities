@@ -82,7 +82,7 @@ The other major "quirk" of JAGS is that what JAGS does with a model can depend a
 1. Draw a random mu from the prior distribution
 2. Conditional on that value, draw a random X
 
-However, if X IS specified then JAGS will generate samples of $\mu | X$ -- in other words it will estimate the posterior of mu. This polymorphic behavior leads to another quirk -- all distributions are in the "d" form even if you're using them to generate random numbers (i.e. there is no rnorm in JAGS).
+However, if X IS specified then JAGS will generate samples of $\mu | X$ -- in other words it will estimate the posterior of mu. This polymorphic behavior leads to another quirk -- all distributions are in the "d" form even if you're using them to generate random numbers (i.e. there is no `rnorm` in JAGS).
 
 Because of how JAGS views random variables, no variable can show up on the left-hand side more than once -- it's can't be both calculated and random, it can't be calculated more than once, and it can't have multiple priors or data models. Most of the time this is fine, but what catchs many people is that it means you **can't reuse temporary variables**, because JAGS will view this as an attempt to redefine them.
 

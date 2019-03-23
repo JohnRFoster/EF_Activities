@@ -18,7 +18,7 @@ For steps 2-4 we will leverage functions already written to deal with these step
 
 
 ```{r}
-if(!require(PEcAn.data.land)){
+if(!require(PEcAn.data.land)){ ## had to run this line-by-line
   library(devtools)
   install.packages(c("digest","dplR","PeriodicTable"))
   devtools::install_github("PecanProject/pecan/base/logger")
