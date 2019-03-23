@@ -7,9 +7,9 @@ For this activity we will write all the code, process all the data, and visualiz
 
 ```{r}
 library(rjags)
-library(rnoaa)
-devtools::install_github("EcoForecast/ecoforecastR", force = T)
-#library(daymetr)
+#library(rnoaa)
+library(daymetr)
+devtools::install_github("EcoForecast/ecoforecastR")
 ```
 
 Next we'll want to grab the data we want to analyze. For this example we'll use the Google Flu Trends data for the state of Massachusetts, which we saw how to pull directly off the web in Activity 3.
@@ -93,20 +93,15 @@ jags.out   <- coda.samples (model = j.model,
 Given the full joint posteror samples, we're next going to visualize the output by just looking at the 95% credible interval of the timeseries of X's and compare that to the observed Y's. To do so we'll convert the coda output into a matrix and then calculate the quantiles. Looking at colnames(out) will show you that the first two columns are `tau_add` and `tau_obs`, so we calculate the CI starting from the 3rd column. We also transform the samples back from the log domain to the linear domain.
 ```{r}
 time.rng = c(1,length(time)) ## adjust to zoom in and out
-ciEnvelope <- function(x,ylo,yhi,...){
-  polygon(cbind(c(x, rev(x), x[1]), c(ylo, rev(yhi),
-                                      ylo[1])), border = NA,...) 
-}
 out <- as.matrix(jags.out)
 x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
-ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
-
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
 plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
 ## adjust x-axis label to be monthly if zoomed
 if(diff(time.rng) < 100){ 
   axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
 }
-ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
 points(time,y,pch="+",cex=0.5)
 ```
 
@@ -130,10 +125,11 @@ To look at how observation frequency affects data assimilation, convert 3 out of
 * Generate a time-series plot for the CI of x that includes the observations (as above). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
 * Compare the CI between the two runs.
 * Generate a predicted (median) vs observed plot for the data points that were removed
-* Comment on the accuracy and precision of the estimates.
+* Comment on the accuracy and precision of the state estimates.
+* How does the reduction in data volume affect the parameter estimates (taus)
 
-Extra Credit:
--------------
+Extra Credit (Part 1):
+----------------------
 
 Return to the original data and instead of removing 3/4 of the data remove the last 40 observations (convert to NA) and refit the model to make a forecast for this period
 
@@ -158,7 +154,6 @@ df <- daymetr::download_daymet(site = "Boston",
                 internal = TRUE)$data
 df$date <- as.Date(paste(df$year,df$yday,sep = "-"),"%Y-%j")
 data$Tmin = df$tmin..deg.c.[match(time,df$date)]
-
 ## fit the model
 ef.out <- ecoforecastR::fit_dlm(model=list(obs="y",fixed="~ Tmin"),data)
 names(ef.out)
@@ -173,7 +168,6 @@ plot(params)
 summary(params)
 cor(as.matrix(params))
 pairs(as.matrix(params))
-
 ## confidence interval
 out <- as.matrix(ef.out$predict)
 ci <- apply(exp(out),2,quantile,c(0.025,0.5,0.975))
@@ -182,7 +176,7 @@ plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim
 if(diff(time.rng) < 100){ 
   axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
 }
-ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
 points(time,y,pch="+",cex=0.5)
 ```
 
@@ -195,7 +189,7 @@ This code illustrates a few things:
 * The "Priors" section is identical to our earlier random walk model
 * The "Random Effects" section, which is currently commented out, illustrates that the `ecoforcastR::fit_dlm` function supports random effects, which can be turned on via the `model$random` argument
 * The "Fixed Effects" section contains additional priors for our fixed effects as well as priors on the means (mu) and precisions (tau) of the covariates. 
-* The "Data Model" section is the same as in our random walk except for the addition of code for the means of the covariates. This code isn't here as a very simple missing data model -- any time the covariate is observed it is used to estimate the mean an precision, but any time the covariate is NA it is imputed.
+* The "Data Model" section is the same as in our random walk except for the addition of code for the means of the covariates. This code is here as a very simple missing data model -- any time the covariate is observed it is used to estimate the mean and precision, but any time the covariate is missing (NA) it is imputed.
 * The "Process Model" is very similar to the random walk, except now the expected value (mu) is calculated according to the linear model described earlier
 
 Finally, the returned object also includes the `data` that was used to fit the model.
@@ -204,4 +198,13 @@ Assignment:
 -----------
 
 * Compare the process and observation error estimates and model CI between this fit and the original random walk model. How much has the residual variance been reduced by?
-* Explain and discuss the parameter estimates (betas) from the linear model
+* Because a state-space model returns X's that are close to the Y's, metrics such as R2 and RMSE aren't great metrics of model performance. Besides looking at the taus, how else could we judge which model is doing better (in a way that avoids/penalizes overfitting)?
+* Explain and discuss the parameter estimates (betas) from the linear model (what do they mean both biologically and in terms of the predictability of the system) and their correlations
+
+Extra Credit (Part 2):
+----------------------
+
+Repeat the process of forecasting the last 40 observations (convert to NA), this time using the DLM with temperature as a covariate
+
+* Generate a time-series plot for the CI that includes the observations and both the random walk and DLM models (Hint, think about the order you plot in so you can see both models, also consider including transpancy [alpha] in the CI color)
+* Comment on how well the DLM model performed (both accuracy and precision) relative to the random walk and the true observations. How could the model be further improved?
