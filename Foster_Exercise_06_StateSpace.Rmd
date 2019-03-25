@@ -1,0 +1,322 @@
+---
+title: "State Space Lab"
+author: "John R Foster"
+date: "March 14, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rjags)
+#library(rnoaa)
+library(daymetr)
+library(ecoforecastR)
+```
+
+# Assignment (Part 1)
+
+```{r}
+gflu = read.csv("http://www.google.org/flutrends/about/data/flu/us/data.txt",skip=11)
+time = as.Date(gflu$Date)
+y = gflu$Massachusetts
+
+RandomWalk = "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model
+  for(t in 2:n){
+    x[t]~dnorm(x[t-1],tau_add)
+  }
+  
+  #### Priors
+  x[1] ~ dnorm(x_ic,tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs)
+  tau_add ~ dgamma(a_add,r_add)
+}
+"
+
+y.na <- y
+for(i in 1:length(y)){
+  if(i %% -4) {
+    y.na[i] <- NA
+  }
+}
+
+data <- list(y=log(y),
+             n=length(y),
+             x_ic=log(1000),
+             tau_ic=100,
+             a_obs=1,
+             r_obs=1,
+             a_add=1,
+             r_add=1)
+
+data.na <- list(y=log(y.na),  # change to NA data set
+             n=length(y),
+             x_ic=log(1000),
+             tau_ic=100,
+             a_obs=1,
+             r_obs=1,
+             a_add=1,
+             r_add=1)
+
+nchain = 3
+init <- list()
+for(i in 1:nchain){
+  y.samp = sample(y,length(y),replace=TRUE)
+  init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),tau_obs=5/var(log(y.samp)))
+}
+
+j.model <- jags.model(file = textConnection(RandomWalk),
+                      data = data,
+                      inits = init,
+                      n.chains = 3)
+
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x","tau_add","tau_obs"),
+                         n.iter = 15000)
+
+## split output
+out <- list(params = NULL, predict = NULL)
+mfit <- as.matrix(jags.out, chains = TRUE)
+pred.cols <- grep("x[", colnames(mfit), fixed = TRUE)
+chain.col <- which(colnames(mfit) == "CHAIN")
+out$predict <- ecoforecastR::mat2mcmc.list(mfit[, c(chain.col, pred.cols)])
+out$params <- ecoforecastR::mat2mcmc.list(mfit[, -pred.cols])
+
+## check burnin
+GBR <- gelman.plot(out$params)
+burnin <- GBR$last.iter[tail(which(apply(GBR$shrink[,,2] > 1.1, 1, any)),1)+1]
+
+## check for no burn-in case
+if(length(burnin) == 0) burnin = 1
+
+## remove burn-in
+params.burn <- window(out$params,start=burnin)
+predict.burn <- window(out$predict,start=burnin)
+
+## convert to matrix
+params.mat <- as.matrix(params.burn)
+predict.mat <- as.matrix(predict.burn)
+
+## more diagnostics
+effectiveSize(params.burn)
+gelman.diag(params.burn)
+pairs(params.mat)
+
+## CI
+ci <- apply(exp(predict.mat),2,quantile,c(0.025,0.5,0.975))
+
+j.model <- jags.model(file = textConnection(RandomWalk),
+                      data = data.na,
+                      inits = init,
+                      n.chains = 3)
+
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x","tau_add","tau_obs"),
+                         n.iter = 20000)
+
+## split output
+out <- list(params = NULL, predict = NULL)
+mfit <- as.matrix(jags.out, chains = TRUE)
+pred.cols <- grep("x[", colnames(mfit), fixed = TRUE)
+chain.col <- which(colnames(mfit) == "CHAIN")
+out$predict <- ecoforecastR::mat2mcmc.list(mfit[, c(chain.col, pred.cols)])
+out$params <- ecoforecastR::mat2mcmc.list(mfit[, -pred.cols])
+
+## check burnin
+GBR <- gelman.plot(out$params)
+burnin <- GBR$last.iter[tail(which(apply(GBR$shrink[,,2] > 1.1, 1, any)),1)+1]
+
+## check for no burn-in case
+if(length(burnin) == 0) burnin = 1
+
+## remove burn-in
+params.burn <- window(out$params,start=burnin)
+predict.burn <- window(out$predict,start=burnin)
+
+## convert to matrix
+params.mat <- as.matrix(params.burn)
+predict.mat <- as.matrix(predict.burn)
+
+## more diagnostics
+effectiveSize(params.burn)
+gelman.diag(params.burn)
+pairs(params.mat)
+
+## state CIs
+ci.na <- apply(exp(predict.mat),2,quantile,c(0.025,0.5,0.975))
+
+## plot with missing data
+time.rng = c(1,length(time)) ## adjust to zoom in and out
+plot(time,ci.na[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.na[1,],ci.na[3,],col="lightBlue")
+points(time,y,pch="+",cex=0.5) # all data points
+points(time,y.na,pch="+",cex=0.5, col = 2) # just data used in model
+legend("topleft",
+       legend = c("All data", "3/4 Missing data", "95% CI missing data model"),
+       lty = c(NA, NA, 1),
+       pch = c("+", "+", NA),
+       col = c(1, 2, "lightblue"),
+       lwd = c(NA, NA, 7))
+
+## plot to view difference in CIs between two models
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+ecoforecastR::ciEnvelope(time,ci.na[1,],ci.na[3,],col="lightBlue")
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="grey")
+legend("topleft",
+       legend = c("95% CI all data model", "95% CI missing data model"),
+       lty = c(1, 1),
+       col = c("grey", "lightblue"),
+       lwd = c(7, 7))
+
+## predicted vs. observed for missing data points
+x.median <- apply(exp(predict.mat), 2, median) # mean of x's from missing data
+index <- which(!is.na(y.na))
+x.median <- x.median[index]
+y.obs <- y[index]
+
+plot(x.median, y.obs,
+     xlab = "Predicted",
+     ylab = "Observed")
+abline(0, 1)
+```
+
+The model does a fairly good job predicting the missing data, especially at the lower end, and tend to underpredict at the higher end. As expected the CI around the model with all data points is much tighter than the CI for the missing data fit. 
+
+
+# Extra Credit (Part 1)
+
+```{r}
+y.ec <- y
+y.ec[580:620] <- NA
+
+data <- list(y=log(y.ec),  # change to EC data set
+             n=length(y),
+             x_ic=log(1000),
+             tau_ic=100,
+             a_obs=1,
+             r_obs=1,
+             a_add=1,
+             r_add=1)
+
+j.model <- jags.model(file = textConnection(RandomWalk),
+                      data = data,
+                      inits = init,
+                      n.chains = 3)
+
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x","tau_add","tau_obs"),
+                         n.iter = 10000)
+
+out <- as.matrix(jags.out)
+x.cols <- grep("^x",colnames(out)) ## grab all column number that start with the letter x
+ci.ec <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975))
+
+time.rng = c(length(time)-80,length(time)) ## adjust to zoom in and out
+## plot with missing data
+plot(time,ci.ec[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.ec[1,],ci.ec[3,],col="lightBlue")
+points(time,y,pch="+",cex=0.5) # all data points
+points(time,y.ec,pch=16,cex=0.5, col = 2) # just data used in model
+```
+
+Forecast uncertainty blows up quickly after the last observation. But it does capture the peak observation around 2015-01. This could be improved by adding covariates to the model, moving from the random walk to a process-based forecast. 
+
+
+# Assignment (Part 2)
+
+```{r}
+## grab weather data
+df <- daymetr::download_daymet(site = "Boston",
+                               lat = 42.36,
+                               lon = -71.06,
+                               start = 2003,
+                               end = 2016,
+                               internal = TRUE)$data
+
+df$date <- as.Date(paste(df$year,df$yday,sep = "-"),"%Y-%j")
+
+## fit the model
+data <- list(y=log(y),
+             n=length(y),
+             x_ic=log(1000),
+             tau_ic=100,
+             a_obs=1,
+             r_obs=1,
+             a_add=1,
+             r_add=1)
+
+data$Tmin = df$tmin..deg.c.[match(time,df$date)]
+
+ef.out <- ecoforecastR::fit_dlm(model=list(obs="y",fixed="~ Tmin"),data)
+names(ef.out)
+
+## parameter diagnostics
+params <- window(ef.out$params,start=1000) ## remove burn-in
+plot(params)
+summary(params)
+cor(as.matrix(params))
+pairs(as.matrix(params))
+
+## confidence interval
+out <- as.matrix(ef.out$predict)
+ci <- apply(exp(out),2,quantile,c(0.025,0.5,0.975))
+
+time.rng = c(1,length(time))
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
+points(time,y,pch="+",cex=0.5)
+```
+
+The process model reduces the width of the confidence intervals significantly. To judge the models, we can look at DIC, make an out-of-sample prediction, do a one-step-ahead prediction for the time series and look at predictive posteriors (residuals and predicted vs. observed), run the model with some missing data like above and see how the CI inflates compared to the random walk.
+
+`beta_IC` has the highest magnitutde at essentially one, meaning the initial condtion is most important in predicting the next step.
+
+`betaTmin` is negative and essentially zero, so there is a slight negative relationship between temperature and flu cases, which makes perfect sense.
+
+`betaIntercept` is positive, so all else equal we expect the cases to increase.
+
+Intercept is negatively correlated with the fixed effects (to be expected), and the fixed effects are positively correlated. 
+
+```{r}
+data$y.ec <- log(y.ec)
+ef.out <- ecoforecastR::fit_dlm(model=list(obs="y.ec",fixed="~ Tmin"),data)
+params <- window(ef.out$params,start=1000) ## remove burn-in
+plot(params)
+
+## confidence interval
+out <- as.matrix(ef.out$predict)
+ci.dlm <- apply(exp(out),2,quantile,c(0.025,0.5,0.975))
+
+time.rng = c(length(time)-80,length(time)) ## adjust to zoom in and out
+## plot with missing data
+plot(time,ci.ec[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.ec[1,],ci.ec[3,],col="lightBlue")
+ecoforecastR::ciEnvelope(time,ci.dlm[1,],ci.dlm[3,],col="lightgreen")
+points(time,y,pch="+",cex=0.5) # all data points
+points(time,y.ec,pch=16,cex=0.5, col = 2) # just data used in model
+````
+
+The DLM model is more precise when fitting the model and when forecasting, but fails to capture the large peak at 2015-01. Also, the width of the CI for the DLM during forecasting seems to stop growing while the CI for the random walk always grows. The accuracy between the two models is roughly the same during the model fit. The model might be improved by adding more drivers.

@@ -1,0 +1,212 @@
+---
+title: "05B Regression"
+author: "John Foster"
+date: "March 4, 2019"
+output: html_document
+---
+```{r}
+library(rjags)
+library(coda)
+```
+
+### Lab Report Task 1
+
+```{r}
+### Part 1: simulate data from a known model
+n <- 100  			## define the sample size
+b0 <- 10				## define the intercept
+b1 <- 2					## define the slope
+beta <- matrix(c(b0,b1),2,1)		## put “true” regression parameters in a matrix
+sigma <- 4				## define the standard deviation
+
+x1 <- runif(n,0,20)
+x <- cbind(rep(1,n),x1)
+y <- rnorm(n,x%*%beta,sigma)
+
+data <- list(x = x1, y = y, n = n)
+
+univariate_regression <- "
+model{
+  beta ~ dmnorm(b0,Vb)  	## prior regression params
+  prec ~ dgamma(s1,s2)  ## prior precision
+  sd <- 1/sqrt(prec)
+  for(i in 1:n){
+	  mu[i] <- beta[1] + beta[2]*x[i]   	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		## data model
+  }
+}"
+
+## specify priors
+data$b0 <- as.vector(c(0,0))      ## regression beta means
+data$Vb <- solve(diag(10000,2))   ## regression beta precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = rnorm(2,0,5), prec = runif(1,1/100,1/20))
+}
+
+j.model   <- jags.model(file = textConnection(univariate_regression),
+                             data = data,
+                             inits = inits,
+                             n.chains = nchain)
+
+var.out   <- coda.samples (model = j.model,
+                            variable.names = c("beta","sd"),
+                                n.iter = 2000)
+
+# GBR
+GBR <- gelman.plot(var.out)
+
+## convert to matrix
+var.mat      <- as.matrix(var.out)
+
+## Pairwise scatter plots & correlation
+pairs(var.mat)	## pairs plot to evaluate parameter correlation
+cor(var.mat)
+
+#plot(var.out)
+
+gelman.diag(var.out)
+
+## determine the first iteration after convergence
+burnin <- GBR$last.iter[tail(which(apply(GBR$shrink[,,2] > 1.1, 1, any)),1)+1]
+
+## check for no burn-in case
+if(length(burnin) == 0) burnin = 1
+
+## remove burn-in
+var.burn <- window(var.out,start=burnin)
+
+## check diagnostics post burn-in
+gelman.diag(var.burn)
+plot(var.burn)
+summary(var.burn)
+
+## classic model
+c.lm <- lm(y ~ x1)
+summary(c.lm)
+```
+
+As we can see from the summary outputs for the Bayes and lm() models, the estimated intercept, slope, and standard deviation are the same between the two models. The estimates are not the same (but close) to the known values, which is to be expected as we randomly generated the data. beta[1] and beta[2], are negatively correlated, which is expected for regression. 
+
+### Lab Report Task 2
+
+```{r}
+n <- 250            ## define the sample size
+b0 <- 10                ## define the intercept
+b1 <- 2                 ## define slope1
+b2 <- -4        ## define slope2
+b3 <- 0.5       ## define interaction
+beta <- matrix(c(b0,b1,b2,b3),4,1)      ## put “true” regression parameters in a matrix
+sigma <- 4              ## define the standard deviation
+x1 <- runif(n,0,20)
+x2 <- runif(n,0,15)
+x3 <- x1*x2
+x <- cbind(rep(1,n),x1,x2,x3)
+y <- rnorm(n,x%*%beta,sigma)
+
+multivariate_regression <- "
+model{
+
+  beta ~ dmnorm(b0,Vb)  	## prior regression params
+  prec ~ dgamma(s1,s2)  ## prior precision
+  sd <- 1/sqrt(prec)
+  for(i in 1:n){
+	  mu[i] <- beta[1] + beta[2]*x[i, 2] + beta[3]*x[i, 3] + beta[4]*x[i, 4]  	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		## data model
+  }
+}"
+
+data <- list(x = x, y = y, n = n)
+## specify priors
+data$b0 <- as.vector(c(0, 0, 0, 0))      ## regression beta means
+data$Vb <- solve(diag(10000,4))   ## regression beta precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = rnorm(4,0,5), prec = runif(1,1/100,1/20))
+}
+
+j.model   <- jags.model(file = textConnection(multivariate_regression),
+                             data = data,
+                             inits = inits,
+                             n.chains = nchain)
+
+var.out.m   <- coda.samples (model = j.model,
+                            variable.names = c("beta","sd"),
+                                n.iter = 2000)
+
+
+GBR <- gelman.plot(var.out.m)
+
+## determine the first iteration after convergence
+
+burnin <- GBR$last.iter[tail(which(apply(GBR$shrink[,,2] > 1.1, 1, any)),1)+1]
+
+## check for no burn-in case
+if(length(burnin) == 0) burnin = 1
+## remove burn-in
+var.burn <- window(var.out.m,start=burnin)
+
+## Trace plot
+plot(var.burn)
+var.burn.mat <- as.matrix(var.burn)
+
+# pairwise distributions
+pairs(var.burn.mat)
+cor(var.burn.mat)
+
+plot(density(var.burn.mat[,1]), main = "Density: beta[0]")
+abline(v = b0, col = "blue")
+legend("topleft",
+       legend = "True Value",
+       col = "blue",
+       lty = 1)
+
+plot(density(var.burn.mat[,2]), main = "Density: beta[1]")
+abline(v = b1, col = "blue")
+legend("topleft",
+       legend = "True Value",
+       col = "blue",
+       lty = 1)
+
+plot(density(var.burn.mat[,3]), main = "Density: beta[2]")
+abline(v = b2, col = "blue")
+legend("topleft",
+       legend = "True Value",
+       col = "blue",
+       lty = 1)
+
+plot(density(var.burn.mat[,4]), main = "Density: beta[3]")
+abline(v = b3, col = "blue")
+legend("topleft",
+       legend = "True Value",
+       col = "blue",
+       lty = 1)
+
+plot(density(var.burn.mat[,5]), main = "Density: SD")
+abline(v = sigma, col = "blue")
+legend("topleft",
+       legend = "True Value",
+       col = "blue",
+       lty = 1)
+
+# mcmc parameter summary
+summary(var.burn)
+
+multi.lm <- lm(y ~ x1 + x2 + x3)
+summary(multi.lm)
+
+```
+
+We can see that the Bayes model missed the mark on estimating the parameters (though close), and did fairly well on estimating standard dev. 
+
+

@@ -1,0 +1,226 @@
+---
+title: "GE 585 Exercise 3 (Lab 2)"
+author: "John Foster"
+output: html_document
+---
+
+```{r,include=FALSE}
+## since libraries will be pulled, make sure repository is set
+repos = "http://cran.us.r-project.org"
+get.pkg <- function(pkg){
+  loaded <- do.call("require",list(package=pkg))
+  if(!loaded){
+    print(paste("trying to install",pkg))
+    install.packages(pkg,dependencies=TRUE,repos=repos)
+    loaded <- do.call("require",list(package=pkg))
+    if(loaded){
+      print(paste(pkg,"installed and loaded"))
+    } 
+    else {
+      stop(paste("could not install",pkg))
+    }    
+  }
+}
+get.pkg("RCurl")
+get.pkg("XML")
+get.pkg("ncdf4")
+get.pkg("devtools")
+get.pkg("MODISTools")
+```
+
+
+**Question 1:**
+
+Using the US Forest Service's Forest Inventory and Analysis (FIA) data set, plot the rank vs log(abundance) curve for tree seedling counts from Rhode Island. Data is available at https://apps.fs.usda.gov/fia/datamart/CSV/RI_SEEDLING.csv and the relevant columns are TREECOUNT (raw seedling counts) and SPCD (species codes). 
+Hints: tapply, sum, na.rm=TRUE, sort, decreasing=TRUE, log='y'
+
+```{r}
+seeds.html <- read.csv("https://apps.fs.usda.gov/fia/datamart/CSV/RI_SEEDLING.csv")  ## grab raw html
+tree.count <- seeds.html[,"TREECOUNT_CALC"]
+spcd <- as.factor(seeds.html[,"SPCD"])
+
+rank <- sort(tapply(tree.count, spcd, sum, na.rm = TRUE), decreasing = TRUE)
+
+plot(unique(spcd), rank,
+     log = "y",
+     xlab = "Species Code",
+     ylab = "Log Abundance")
+
+```
+
+**Question 2:**
+Create a sorted table of how many FLUXNET eddy-covariance towers are in each country according to the website at http://fluxnet.fluxdata.org/sites/site-list-and-pages/. Hint: use substring to extract the country code from the overall FLUXNET ID code.
+
+I tried several different ways to get the data (below), but ultimitely kept getting `NULL` within the object. _If_ I were able to download data, I would have used `grep` with some sort of regex to extract country codes, and then sort them into a table with `kable()`
+
+```
+flux <- getURL("http://fluxnet.fluxdata.org/sites/site-list-and-pages/")  
+flux_table <- readHTMLTable(flux)    
+
+flux_table <- readHTMLTable("http://fluxnet.fluxdata.org/sites/site-list-and-pages/")
+
+flux_table <- readHTMLList("http://fluxnet.fluxdata.org/sites/site-list-and-pages/")
+```
+
+
+**Question 3:** Within the object myCode, find all the lines that begin with the comment character, #.
+
+```{r}
+myCode = readLines("Exercise_03_BigData.Rmd")  ## read unstructured text
+comment <- grep("^#", myCode)
+
+# line numbers beginning with "#"
+comment
+
+# actual character strings beginning with "#"
+myCode[comment]
+```
+
+
+netCDF, wget
+------------
+
+In this section I want to introduce another command-line utility, wget, which can be used to pull files and content off the web, and to demonstrate how netCDF can be used in R. For this example we will be using data from the WLEF eddy-covariance tower located in northern Wisconsin. Unlike most flux towers, WLEF is a "tall-tower" -- it's actually a 440m TV antenna -- which means that it integrates over a much larger footprint than most towers. Indeed, the tower is instrumented at multiple heights. First, let's use wget to grab the data off the web. A few notes: 1) wget could be used from command line rather than as a system command;  2) if you don't have wget installed, use your web browser
+
+```{r, include=F}
+system("wget http://flux.aos.wisc.edu/data/cheas/wlef/netcdf/US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")
+```
+
+Next, lets open the file and look at what it contains
+```{r}
+## open the netCDF file
+wlef = nc_open("US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")
+# print(wlef)    ## metadata
+```
+
+To start, lets look at the CO2 flux data, NEE_co2, which we see is stored in a matrix that has dimensions of [level2,time], where here level2 refers to the different measurements heights. If we want to grab this data and the vectors describing the dimensions we can do this as:
+
+```{r}
+NEE = ncvar_get(wlef,"NEE_co2")    ## NEE data
+
+## matrix dimensions
+height = ncvar_get(wlef,"M_lvl")  
+doy = ncvar_get(wlef,"time")  # day of year
+
+## close file connection
+nc_close(wlef)
+```
+
+Finally, we can plot the data at the different heights. Since this flux data is recorded hourly the raw data is a bit of a cloud, therefore we use the function `filter` to impose a 24 hour moving window, which is indicated in the function as a vector of 24 weights, each given an equal weight of 1/24. 
+
+```{r}
+## print fluxes at 3 different heights
+for(i in 1:3){
+plot(doy,filter(NEE[i,],rep(1/24,24)),type='l',main=paste("Height =",height[i],"m"))
+}
+```
+
+Alternative, if I just wanted to get a subset of air temperature data (e.g. 24 hours of data from the top height for the 220th day of the year)
+
+```{r}
+start = which(doy > 220)[1]
+wlef = nc_open("US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")
+TA = ncvar_get(wlef,"TA",c(3,start),c(1,24))
+plot(TA,type = 'l')
+nc_close(wlef)
+```
+
+
+
+**Question 4:** 
+
+Similar to how we can point read.csv to the URL of a text file, you can open and manipulate netCDF files on remote servers if those servers support THREDDS/OpenDAP. Furthermore, these utilities let you grab just the part of the file that you need rather than the file in it's entirety. Using this approach, download and plot the air temperature data for Boston for 2004 that's located on the ORNL DAAC server `http://thredds.daac.ornl.gov/thredds/dodsC/ornldaac/1220/mstmip_driver_global_hd_climate_tair_2004_v1.nc4`.  The underlying file is quite large so make sure to grab just the subset you need. To do so you'll need to first grab the lat, lon, and time variables to find _which_ grid cell to grab for lat and lon and how many values to grab from time (i.e. _length_). 
+
+
+```{r}
+thredds <- nc_open("http://thredds.daac.ornl.gov/thredds/dodsC/ornldaac/1220/mstmip_driver_global_hd_climate_tair_2004_v1.nc4")
+
+bos.lat <- 42.36 # boston lat
+bos.lon <- -71.06 # boston lon
+
+# get lat/lon indicies
+lat <- ncvar_get(thredds,"lat")
+lat <- which.min(abs(lat - bos.lat))
+lon <- ncvar_get(thredds,"lon")
+lon <- which.min(abs(lon - bos.lon))
+
+# get date sequence
+seq.2004 <- seq.Date(as.Date("2004-01-01"),as.Date("2004-12-31"),1)
+date.seq <- as.numeric(seq.2004 - as.Date("1700-01-01"))
+
+# get date indicies
+time <- ncvar_get(thredds,"time")
+time.start <- which.min(abs(time - date.seq[1]))
+time.end <- which.min(abs(time - date.seq[length(date.seq)]))
+time <- time[time.start:time.end]
+
+tair <- ncvar_get(thredds,"tair", c(lon,lat,1), c(1,1,length(time)))
+
+doy.seq <- as.character(round(seq(1, 366, length.out = 10)))
+at.seq <- round(seq(1, length(time), length.out = 10))
+
+plot(1:length(time), tair-273.15,
+     main = "Boston Air Temperature in 2004",
+     xlab = "Day of Year",
+     ylab = "Degrees C",
+     xaxt = "n")
+axis(1, at = at.seq, labels = doy.seq)
+
+```
+
+
+
+```{r}
+WC_file = "MODIS.WillowCreek.RData"
+if(file.exists(WC_file)){
+  load(WC_file)
+} else {
+  subset <- MODISTools::mt_subset(product = "MOD13Q1",
+                                band = "250m_16_days_EVI",
+                                lat=46.0827,
+                                lon=-89.9792,
+                                start="2012-01-01",
+                                end="2012-12-31",
+                                km_lr = 1,
+                                km_ab = 1,
+                                site_name = "WillowCreek")
+  save(subset,file=WC_file)
+}
+# subset$header
+# head(subset$data)
+```
+
+
+```{r}
+## average EVI spatially & use 'scale' to set units
+EVI = tapply(subset$data$data, subset$data$calendar_date, mean,na.rm=TRUE) * as.numeric(subset$header$scale)
+time = as.Date(names(EVI))
+```
+
+**Question 5:** Plot EVI versus time and compare to the CO2 flux observations.
+
+```{r}
+plot(time, EVI,
+     type = "l",
+     main = "EVI at Willow Creek",
+     ylab = "EVI",
+     xlab = "Time")
+```
+
+
+In gerneral we see an inverse relationship to the fluxk tower observations. EVI increases in the middle of the year while the fluxes decrease.
+
+
+**Question #6:**
+
+Imagine you are working with the full FIA database and want to ensure that the data you are using is always up to date. However, the total size of the database is large, the USFS server is slow, and you don't want to completely delete and reinstall the database every day when only a small percentage of the data changes in any update. 
+
+* Write out the pseudocode/outline for how to keep the files up to date
+* Write out what the cron table would look like to schedule this job (assume the update only needs to be done weekly)
+
+The cron job runs once a week, and checks the status/size of the database. If nothing has changed then the script ends. If there is a change, then only the new data is downloaded and assimilated to the local database, along with any new metadata.  
+
+```
+MAILTO=fosterj@bu.edu
+30 0 * * tue /projectnb/dietzelab/fosterj/get_newFIA.sh
+```
