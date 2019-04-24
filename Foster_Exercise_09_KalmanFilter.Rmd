@@ -1,0 +1,370 @@
+---
+title: "Kalman Filter"
+author: "John R Foster"
+date: "April 7, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## load the Google flu data & select states
+gflu = read.csv("http://www.google.org/flutrends/about/data/flu/us/data.txt",skip=11)
+time = as.Date(gflu$Date)
+states = c("Massachusetts","Connecticut","Rhode.Island","New.Hampshire","Vermont","Maine")
+nstates = length(states)
+y = t(gflu[,states])
+
+## plot time-series from states
+plot(time,1:length(time),type='n',ylab="Flu Index",lwd=2,log='y',ylim=range(y,na.rm=TRUE))
+for(i in 1:nstates){
+  lines(time,y[i,],col=i,lwd=2)
+}
+legend("topleft",legend=states,lwd=2,col=1:nstates)
+
+## define adjacency between states slected
+adj = matrix(c(0,1,1,1,1,0,    ### state-to-state spatial adjacency (self=0)
+               1,0,1,0,0,0,
+               1,1,0,0,0,0,
+               1,0,0,0,1,1,
+               1,0,0,1,0,0,
+               0,0,0,1,0,0),nstates,nstates,byrow=TRUE)
+
+
+## load parameters (assume known)
+load("data/KFalpha.params.Rdata")
+## observation error
+tau_obs
+## process error covariance
+# knitr::kable(tau_proc,col.names = states)  ## for Rmd
+tau_proc
+## process error correlation
+knitr::kable(cov2cor(tau_proc),col.names = states)
+cov2cor(tau_proc)
+## process error SD
+sqrt(diag(tau_proc))
+
+##'  Kalman Filter
+##' @param  M   = model matrix
+##' @param  mu0 = initial condition mean vector
+##' @param  P0  = initial condition covariance matrix
+##' @param  Q   = process error covariance matrix
+##' @param  R   = observation error covariance matrix
+##' @param  Y   = observation matrix (with missing values as NAs), time as col's
+##'
+##' @return list
+##'  mu.f, mu.a  = state mean vector for (a)nalysis and (f)orecast steps
+##'  P.f, P.a    = state covariance matrix for a and f
+KalmanFilter <- function(M,mu0,P0,Q,R,Y){
+  
+  ## storage
+  nstates = nrow(Y)  
+  nt = ncol(Y)
+  mu.f  = matrix(NA,nstates,nt+1)  ## forecast mean for time t
+  mu.a  = matrix(NA,nstates,nt)  ## analysis mean for time t
+  P.f  = array(NA,c(nstates,nstates,nt+1))  ## forecast variance for time t
+  P.a  = array(NA,c(nstates,nstates,nt))  ## analysis variance for time t
+  
+  ## initialization
+  mu.f[,1] = mu0
+  P.f[,,1] = P0
+  I = diag(1,nstates)
+  
+  ## run updates sequentially for each observation.
+  for(t in 1:nt){
+    
+    ## Analysis step: combine previous forecast with observed data
+    KA <- KalmanAnalysis(mu.f[,t],P.f[,,t],Y[,t],R,I)
+    mu.a[,t] <- KA$mu.a
+    P.a[,,t] <- KA$P.a
+    
+    ## Forecast step: predict to next step from current
+    KF <- KalmanForecast(mu.a[,t],P.a[,,t],M,Q)
+    mu.f[,t+1] <- KF$mu.f
+    P.f[,,t+1] <- KF$P.f
+  }
+  
+  return(list(mu.f=mu.f,mu.a=mu.a,P.f=P.f,P.a=P.a))
+}
+
+##' Kalman Filter: Analysis step
+##' @param  mu.f = Forecast mean (vector)
+##' @param  P.f  = Forecast covariance (matrix)
+##' @param  Y    = observations, with missing values as NAs) (vector)
+##' @param  R    = observation error covariance (matrix)
+##' @param  H    = observation matrix (maps observations to states)
+KalmanAnalysis <- function(mu.f,P.f,Y,R,H){
+  obs = !is.na(Y) ## which Y's were observed?
+  if(any(obs)){
+    H <- H[obs,]                                              ## observation matrix
+    K <- P.f %*% t(H) %*% solve(H%*%P.f%*%t(H) + R[obs,obs])  ## Kalman gain
+    mu.a <- mu.f + K%*%(Y[obs] - H %*% mu.f)                  ## update mean
+    P.a <- (1-K %*% H)*P.f                                    ## update covariance
+  } else {
+    ##if there's no data, the posterior is the prior
+    mu.a = mu.f
+    P.a = P.f
+  }
+  return(list(mu.a=mu.a,P.a=P.a))
+}
+
+##' Kalman Filter: Forecast Step
+##' @param mu.a = analysis posterior mean (vector)
+##' @param P.a  = analysis posterior covariance (matrix)
+##' @param M    = model (matrix)
+##' @param  Q   = process error covariance (matrix)
+KalmanForecast <- function(mu.a,P.a,M,Q){
+  mu.f = M%*%mu.a
+  P.f  = Q + M*P.a*t(M)
+  return(list(mu.f=mu.f,P.f=P.f))
+}
+
+## log transform data
+Y   = log10(y)
+
+## options for process model 
+alpha = 0       ## assume no spatial flux
+#alpha = 0.05    ## assume a large spatial flux
+M = adj*alpha + diag(1-alpha*apply(adj,1,sum))  ## random walk with flux
+
+## options for process error covariance
+Q = tau_proc            ## full covariance matrix
+#Q = diag(diag(Q))       ## diagonal covariance matrix
+
+## observation error covariance (assumed independent)  
+R = diag(tau_obs,nstates) 
+
+## prior on first step, initialize with long-term mean and covariance
+mu0 = apply(Y,1,mean,na.rm=TRUE)
+P0 = cov(t(Y),use="pairwise.complete.obs")
+
+## Run Kalman Filter
+KF00 = KalmanFilter(M,mu0,P0,Q,R,Y)
+
+attach(KF00)
+nt = length(time)
+
+### plot ANALYSIS mean & CI time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  ci = rbind(mu.a[i,]-1.96*sqrt(P.a[i,i,]),mu.a[i,]+1.96*sqrt(P.a[i,i,]))
+  plot(time,mu.a[i,],ylim=range(ci,na.rm=TRUE),type='n',main=states[i])
+  ecoforecastR::ciEnvelope(time,ci[1,],ci[2,],col="lightBlue")
+  lines(time,mu.a[i,],col=4)
+  lines(time,Y[i,])
+}
+
+## plot ANALYSIS and FORECAST variance time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  plot(time,sqrt(P.a[i,i,]),ylim=c(0,sqrt(max(c(P.a[i,i,],P.f[i,i,])))),main=states[i],xlab="Time",
+       ylab="Std Error",type='l')
+  lines(time,sqrt(P.f[i,i,1:nt]),col=2)
+  points(time[is.na(Y[i,])],rep(0,nt)[is.na(Y[i,])],pch="*",col=3) ## flag's the zero's
+  legend("topright",legend=c("Analysis","Forecast","NAs"),col=1:3,lty=c(1,1,NA),pch=c(NA,NA,1),cex=1.4)
+}
+
+## subset time
+time2 <- time[time>as.Date("2015-01-01")]
+tsel <- which(time %in% time2)
+n = length(time2)*2
+
+## interleave Forecast and Analysis
+mu = p = rep(NA,n)
+mu[seq(1,n,by=2)] = mu.f[1,tsel]
+mu[seq(2,n,by=2)] = mu.a[1,tsel]
+p[seq(1,n,by=2)]  = 1.96*sqrt(P.f[1,1,tsel])
+p[seq(2,n,by=2)]  = 1.96*sqrt(P.a[1,1,tsel])
+ci = cbind(mu-p,mu+p)
+time3 = sort(c(time2,time2+1))
+
+## plot Forecast, Analysis, and data
+par(mfrow=c(1,1))
+plot(time3,mu,ylim=range(ci),type='l')
+ecoforecastR::ciEnvelope(time3,ci[,1],ci[,2],col="lightBlue")
+lines(time3,mu,lwd=2)
+points(time,Y[1,])
+```
+
+# Assignment
+
+
+### KF01
+
+```{r,fig.asp=1.0}
+
+#### KF01 
+#### process error set to the diagonal matrix of Q
+
+Q.diag <- diag(diag(Q)) # diagonal Q
+
+#### process error set to the diagonal matrix of Q
+KF01 <- KalmanFilter(M,mu0,P0,Q.diag,R,Y)
+
+detach()
+attach(KF01)
+nt = length(time)
+
+### plot ANALYSIS mean & CI time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  ci = rbind(mu.a[i,]-1.96*sqrt(P.a[i,i,]),mu.a[i,]+1.96*sqrt(P.a[i,i,]))
+  plot(time,mu.a[i,],ylim=range(ci,na.rm=TRUE),type='n',main=paste("KF01:",states[i],sep=" "))
+  ecoforecastR::ciEnvelope(time,ci[1,],ci[2,],col="lightBlue")
+  lines(time,mu.a[i,],col=4)
+  lines(time,Y[i,])
+}
+
+## plot ANALYSIS and FORECAST variance time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  plot(time,sqrt(P.a[i,i,]),ylim=c(0,sqrt(max(c(P.a[i,i,],P.f[i,i,])))),
+       main=paste("KF01:",states[i],sep=" "),xlab="Time",ylab="Std Error",type='l')
+  lines(time,sqrt(P.f[i,i,1:nt]),col=2)
+  points(time[is.na(Y[i,])],rep(0,nt)[is.na(Y[i,])],pch="*",col=3) ## flag's the zero's
+  legend("topright",legend=c("Analysis","Forecast","NAs"),col=1:3,lty=c(1,1,NA),pch=c(NA,NA,1),cex=1.4)
+}
+
+## subset time
+time2 <- time[time>as.Date("2015-01-01")]
+tsel <- which(time %in% time2)
+n = length(time2)*2
+
+## interleave Forecast and Analysis
+mu = p = rep(NA,n)
+mu[seq(1,n,by=2)] = mu.f[1,tsel]
+mu[seq(2,n,by=2)] = mu.a[1,tsel]
+p[seq(1,n,by=2)]  = 1.96*sqrt(P.f[1,1,tsel])
+p[seq(2,n,by=2)]  = 1.96*sqrt(P.a[1,1,tsel])
+ci = cbind(mu-p,mu+p)
+time3 = sort(c(time2,time2+1))
+
+## plot Forecast, Analysis, and data
+par(mfrow=c(1,1))
+plot(time3,mu,ylim=range(ci),type='l')
+ecoforecastR::ciEnvelope(time3,ci[,1],ci[,2],col="lightBlue")
+lines(time3,mu,lwd=2)
+points(time,Y[1,])
+```
+
+With covariances in process error turned off, we see that the uncertainty increases from the start, and the mean prediction is a flat line because no information is borrowed across states. Analysis and forecast variance are the same as above. 
+
+
+### KF11
+
+```{r,fig.asp=1.0}
+
+#### process error set to the diagonal matrix of Q, alpha = 0.05
+
+alpha.5 <- 0.05 # assume a large spatial flux
+M.5 = adj*alpha.5 + diag(1-alpha.5*apply(adj,1,sum))  ## random walk with flux
+
+KF11 <- KalmanFilter(M.5,mu0,P0,Q.diag,R,Y)
+detach()
+attach(KF11)
+nt = length(time)
+
+### plot ANALYSIS mean & CI time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  ci = rbind(mu.a[i,]-1.96*sqrt(P.a[i,i,]),mu.a[i,]+1.96*sqrt(P.a[i,i,]))
+  plot(time,mu.a[i,],ylim=range(ci,na.rm=TRUE),type='n',main=paste("KF11:",states[i],sep=" "))
+  ecoforecastR::ciEnvelope(time,ci[1,],ci[2,],col="lightBlue")
+  lines(time,mu.a[i,],col=4)
+  lines(time,Y[i,])
+}
+
+## plot ANALYSIS and FORECAST variance time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  plot(time,sqrt(P.a[i,i,]),ylim=c(0,sqrt(max(c(P.a[i,i,],P.f[i,i,])))),
+       main=paste("KF11:",states[i],sep=" "),xlab="Time",ylab="Std Error",type='l')
+  lines(time,sqrt(P.f[i,i,1:nt]),col=2)
+  points(time[is.na(Y[i,])],rep(0,nt)[is.na(Y[i,])],pch="*",col=3) ## flag's the zero's
+  legend("topright",legend=c("Analysis","Forecast","NAs"),col=1:3,lty=c(1,1,NA),pch=c(NA,NA,1),cex=1.4)
+}
+
+## subset time
+time2 <- time[time>as.Date("2015-01-01")]
+tsel <- which(time %in% time2)
+n = length(time2)*2
+
+## interleave Forecast and Analysis
+mu = p = rep(NA,n)
+mu[seq(1,n,by=2)] = mu.f[1,tsel]
+mu[seq(2,n,by=2)] = mu.a[1,tsel]
+p[seq(1,n,by=2)]  = 1.96*sqrt(P.f[1,1,tsel])
+p[seq(2,n,by=2)]  = 1.96*sqrt(P.a[1,1,tsel])
+ci = cbind(mu-p,mu+p)
+time3 = sort(c(time2,time2+1))
+
+## plot Forecast, Analysis, and data
+par(mfrow=c(1,1))
+plot(time3,mu,ylim=range(ci),type='l')
+ecoforecastR::ciEnvelope(time3,ci[,1],ci[,2],col="lightBlue")
+lines(time3,mu,lwd=2)
+points(time,Y[1,])
+```
+
+Here we have spatial flux and no covariance, and we see that the uncertainty in the time series follows the median prediction within each state, and looks to be a bit more precise than the original run. The mean prediction varies within each state due to the flux across states. The variance starts high then stays level during the missing data phase, which is unlike the variance in the first run whitch increased until new data was assimilated. 
+
+### KF10
+
+```{r, fig.asp=1.0}
+
+#### process error set original Q, alpha = 0.05
+KF10 <- KalmanFilter(M.5,mu0,P0,Q,R,Y)
+detach()
+attach(KF10)
+nt = length(time)
+
+### plot ANALYSIS mean & CI time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  ci = rbind(mu.a[i,]-1.96*sqrt(P.a[i,i,]),mu.a[i,]+1.96*sqrt(P.a[i,i,]))
+  plot(time,mu.a[i,],ylim=range(ci,na.rm=TRUE),type='n',main=paste("KF10:",states[i],sep=" "))
+  ecoforecastR::ciEnvelope(time,ci[1,],ci[2,],col="lightBlue")
+  lines(time,mu.a[i,],col=4)
+  lines(time,Y[i,])
+}
+
+## plot ANALYSIS and FORECAST variance time-series
+par(mfrow=c(3,1))
+for(i in 1:6){
+  plot(time,sqrt(P.a[i,i,]),ylim=c(0,sqrt(max(c(P.a[i,i,],P.f[i,i,])))),
+       main=paste("KF10:",states[i],sep=" "),xlab="Time",ylab="Std Error",type='l')
+  lines(time,sqrt(P.f[i,i,1:nt]),col=2)
+  points(time[is.na(Y[i,])],rep(0,nt)[is.na(Y[i,])],pch="*",col=3) ## flag's the zero's
+  legend("topright",legend=c("Analysis","Forecast","NAs"),col=1:3,lty=c(1,1,NA),pch=c(NA,NA,1),cex=1.4)
+}
+
+## subset time
+time2 <- time[time>as.Date("2015-01-01")]
+tsel <- which(time %in% time2)
+n = length(time2)*2
+
+## interleave Forecast and Analysis
+mu = p = rep(NA,n)
+mu[seq(1,n,by=2)] = mu.f[1,tsel]
+mu[seq(2,n,by=2)] = mu.a[1,tsel]
+p[seq(1,n,by=2)]  = 1.96*sqrt(P.f[1,1,tsel])
+p[seq(2,n,by=2)]  = 1.96*sqrt(P.a[1,1,tsel])
+ci = cbind(mu-p,mu+p)
+time3 = sort(c(time2,time2+1))
+
+## plot Forecast, Analysis, and data
+par(mfrow=c(1,1))
+plot(time3,mu,ylim=range(ci),type='l')
+ecoforecastR::ciEnvelope(time3,ci[,1],ci[,2],col="lightBlue")
+lines(time3,mu,lwd=2)
+points(time,Y[1,])
+```
+
+Here we're running with covariance among states and flux between states. This simulation seems to do the best job in terms of precision compared to the others. The forecast and analysis variance is the same as KF11.
+
+
+In the `KalmanAnalysis` function, the calculation of `mu.a` would have to change to reflect the non-linear process model. Also the forecast variance is estimated with a Taylor series. 
+
+
