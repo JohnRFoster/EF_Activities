@@ -280,9 +280,9 @@ LAIlike = array(NA,dim(LAIm))
 sel=1:ncol(LAIm.ci)
 for(i in 1:ne){
   LAIlike[i,] = dnorm(LAIm[i,],LAIr[sel],LAIr.sd[sel],log=TRUE)  ## calculate log likelihoods
-  LAIlike[i,is.na(LAIlike[i,])] = 0       ## missing data as weight 1; log(1)=0
-  LAIlike[i,] = exp(cumsum(LAIlike[i,]))  ## convert to cumulative likelihood
-}
+} # LAIlike[i,is.na(LAIlike[i,])] = 0       ## missing data as weight 1; log(1)=0
+  #LAIlike[i,] = exp(cumsum(LAIlike[i,]))  ## convert to cumulative likelihood
+#}
 hist(LAIlike[,ncol(LAIlike)],main="Final Ensemble Weights")
 
 ## Non-resampling Particle Filter
