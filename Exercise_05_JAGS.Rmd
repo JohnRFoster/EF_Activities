@@ -357,8 +357,8 @@ summary(SD)
 * Describe and explain the parameter covariances that you observe in the pairs plot and parameter correlation matrix.
 * Compare the summary statistics for the Bayesian regression model to those from the classical regression:  summary(lm( y ~ x1 )).  This should include a comparison of the means and uncertainties of **all 3 model parameters**
 
-# Regression Credible Intervals
 
+<<<<<<< HEAD
 When fitting the mean of a distribution, the density plot of that distribution, and its moments/quantiles, provides all the information we need to evaluate the performance of the model.  By contrast, when fitting a process model that has covariates, whether it be a simple regression or a complex nonlinear model, we are also often interested in the error estimate on the overall model.  This error estimate comes in two forms, the credible interval and the prediction interval.  The credible interval, which is the Bayesian analog to the frequentist confidence interval, provides an uncertainty estimate based on the uncertainty in the model parameters.  We have already seen Bayesian credible intervals frequently as the quantiles of the posterior distribution of individual parameters.  We can extend this to an estimate of model uncertainty by looking at the uncertainty in the distribution of the model itself by calculating a credible interval around the regression line.  Numerically we do this by evaluating the model over a sequence of covariate values for every pair of parameter values in the MCMC sequence.  Lets begin by looking at a subset of the MCMC 
 
 ```{r}
@@ -409,6 +409,8 @@ lines(xpred,pi[2,],col=4,lty=2)	## upper PI
 ```
 
 # Extra Credit: Multiple Regression
+=======
+# Multiple Regression
 
 Using the dataset "data/Ex05.Part2.RData", extend your univariate regression to a multiple regression model with two covariates (x1, x2) and an interaction term (x1*x2). In doing so, not only do you need to update your process model, but you also need to make sure to update the dimension of your prior and initial conditions on $b$ from 2 to 4.
 
